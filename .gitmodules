@@ -3,4 +3,7 @@
 	url = https://github.com/libbpf/libbpf
 [submodule "lib/xdp-tools"]
 	path = lib/xdp-tools
-	url = https://github.com/xdp-project/xdp-tools
+	url = https://github.com/xdp-project/xdp-tools/
+[submodule "libbpf"]
+	path = libbpf
+	url = https://github.com/libbpf/libbpf/

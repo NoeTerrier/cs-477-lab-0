@@ -108,6 +108,16 @@ int xdp_icmp_echo_func(struct xdp_md *ctx)
 	/* Assignment 1: patch the packet and update the checksum. You can use
 	 * the echo_reply variable defined above to fix the ICMP Type field. */
 
+	__u16 old_csum = icmphdr->cksum;
+	icmphdr->cksum = 0;
+	struct icmphdr_common icmphdr_old = *icmphdr;
+	icmphdr->type = echo_reply;
+	__u32 csum, size = sizeof(struct icmphdr_common);
+	csum = bpf_csum_diff((__be32 *)&icmphdr_old, size, (__be32 *)icmphdr, size, ~old_csum);
+	__u32 sum = (csum >> 16) + (csum & 0xffff);
+	sum += (sum >> 16);
+	icmphdr->cksum = ~sum;
+
 	bpf_printk("echo_reply: %d", echo_reply);
 
 	action = XDP_TX;
@@ -126,8 +136,8 @@ int xdp_redirect_func(struct xdp_md *ctx)
 	struct ethhdr *eth;
 	int eth_type;
 	int action = XDP_PASS;
-	/* unsigned char dst[ETH_ALEN] = {} */	/* Assignment 2: fill in with the MAC address of the left inner interface */
-	/* unsigned ifindex = 0; */		/* Assignment 2: fill in with the ifindex of the left interface */
+	unsigned char dst[ETH_ALEN] = { 0 };
+	unsigned ifindex = 1;
 
 	/* These keep track of the next header type and iterator pointer */
 	nh.pos = data;
@@ -137,8 +147,9 @@ int xdp_redirect_func(struct xdp_md *ctx)
 	if (eth_type == -1)
 		goto out;
 
-	/* Assignment 2: set a proper destination address and call the
-	 * bpf_redirect() with proper parameters, action = bpf_redirect(...) */
+	/* Set a proper destination address */
+	memcpy(eth->h_dest, dst, ETH_ALEN);
+	action = bpf_redirect(ifindex, 0);
 
 out:
 	return xdp_stats_record_action(ctx, action);
@@ -217,11 +228,17 @@ int xdp_router_func(struct xdp_md *ctx)
 		if (iph->ttl <= 1)
 			goto out;
 
-		/* Assignment 4: fill the fib_params structure for the AF_INET case */
+		fib_params.family	= AF_INET;
+		fib_params.tos		= iph->tos;
+		fib_params.l4_protocol	= iph->protocol;
+		fib_params.sport	= 0;
+		fib_params.dport	= 0;
+		fib_params.tot_len	= bpf_ntohs(iph->tot_len);
+		fib_params.ipv4_src	= iph->saddr;
+		fib_params.ipv4_dst	= iph->daddr;
 	} else if (h_proto == bpf_htons(ETH_P_IPV6)) {
-		/* These pointers can be used to assign structures instead of executing memcpy: */
-		/* struct in6_addr *src = (struct in6_addr *) fib_params.ipv6_src; */
-		/* struct in6_addr *dst = (struct in6_addr *) fib_params.ipv6_dst; */
+		struct in6_addr *src = (struct in6_addr *) fib_params.ipv6_src;
+		struct in6_addr *dst = (struct in6_addr *) fib_params.ipv6_dst;
 
 		ip6h = data + nh_off;
 		if (ip6h + 1 > data_end) {
@@ -232,7 +249,14 @@ int xdp_router_func(struct xdp_md *ctx)
 		if (ip6h->hop_limit <= 1)
 			goto out;
 
-		/* Assignment 4: fill the fib_params structure for the AF_INET6 case */
+		fib_params.family	= AF_INET6;
+		fib_params.flowinfo	= *(__be32 *) ip6h & bpf_htonl(0x0FFFFFFF);
+		fib_params.l4_protocol	= ip6h->nexthdr;
+		fib_params.sport	= 0;
+		fib_params.dport	= 0;
+		fib_params.tot_len	= bpf_ntohs(ip6h->payload_len);
+		*src			= ip6h->saddr;
+		*dst			= ip6h->daddr;
 	} else {
 		goto out;
 	}
@@ -247,11 +271,9 @@ int xdp_router_func(struct xdp_md *ctx)
 		else if (h_proto == bpf_htons(ETH_P_IPV6))
 			ip6h->hop_limit--;
 
-		/* Assignment 4: fill in the eth destination and source
-		 * addresses and call the bpf_redirect function */
-		/* memcpy(eth->h_dest, ???, ETH_ALEN); */
-		/* memcpy(eth->h_source, ???, ETH_ALEN); */
-		/* action = bpf_redirect(???, 0); */
+		memcpy(eth->h_dest, fib_params.dmac, ETH_ALEN);
+		memcpy(eth->h_source, fib_params.smac, ETH_ALEN);
+		action = bpf_redirect(fib_params.ifindex, 0);
 		break;
 	case BPF_FIB_LKUP_RET_BLACKHOLE:    /* dest is blackholed; can be dropped */
 	case BPF_FIB_LKUP_RET_UNREACHABLE:  /* dest is unreachable; can be dropped */

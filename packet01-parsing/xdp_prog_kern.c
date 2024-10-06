@@ -36,7 +36,7 @@ static __always_inline int parse_ethhdr(struct hdr_cursor *nh,
 	/* Byte-count bounds check; check if current pointer + size of header
 	 * is after data_end.
 	 */
-	if (nh->pos + 1 > data_end)
+	if (nh->pos + hdrsize > data_end)
 		return -1;
 
 	nh->pos += hdrsize;
@@ -46,18 +46,44 @@ static __always_inline int parse_ethhdr(struct hdr_cursor *nh,
 }
 
 /* Assignment 2: Implement and use this */
-/*static __always_inline int parse_ip6hdr(struct hdr_cursor *nh,
+static __always_inline int parse_ip6hdr(struct hdr_cursor *nh,
 					void *data_end,
 					struct ipv6hdr **ip6hdr)
 {
-}*/
+	struct ipv6hdr *ip6h = nh->pos;
+
+	/* Pointer-arithmetic bounds check; pointer +1 points to after end of
+	 * thing being pointed to. We will be using this style in the remainder
+	 * of the tutorial.
+	 */
+	if (ip6h + 1 > (struct ipv6hdr *) data_end)
+		return -1;
+
+	nh->pos = ip6h + 1;
+	*ip6hdr = ip6h;
+
+	return 0;
+}
 
 /* Assignment 3: Implement and use this */
-/*static __always_inline int parse_icmp6hdr(struct hdr_cursor *nh,
+static __always_inline int parse_icmp6hdr(struct hdr_cursor *nh,
 					  void *data_end,
 					  struct icmp6hdr **icmp6hdr)
 {
-}*/
+	struct icmp6hdr *icmp6h = nh->pos;
+
+	/* Pointer-arithmetic bounds check; pointer +1 points to after end of
+	 * thing being pointed to. We will be using this style in the remainder
+	 * of the tutorial.
+	 */
+	if (icmp6h + 1 > (struct ipv6hdr *) data_end)
+		return -1;
+
+	nh->pos = icmp6h + 1;
+	*icmp6hdr = icmp6h;
+
+	return 0;
+}
 
 SEC("xdp")
 int  xdp_parser_func(struct xdp_md *ctx)
@@ -88,6 +114,19 @@ int  xdp_parser_func(struct xdp_md *ctx)
 		goto out;
 
 	/* Assignment additions go below here */
+
+	struct ipv6hdr *ip6h;
+	int ret = parse_ip6hdr(&nh, data_end, &ip6h);
+	if (ret) {
+		return XDP_ABORTED;
+	}
+
+	struct icmp6hdr *icmp6hdr;
+	ret = parse_icmp6hdr(&nh, data_end, &icmp6hdr);
+	if (ret) {
+		return XDP_ABORTED;
+	}
+
 
 	action = XDP_DROP;
 out:

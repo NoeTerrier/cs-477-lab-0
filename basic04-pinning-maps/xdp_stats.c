@@ -191,7 +191,11 @@ static void stats_collect(int map_fd, __u32 map_type,
 	}
 }
 
-static void stats_poll(int map_fd, __u32 map_type, int interval)
+#ifndef PATH_MAX
+#define PATH_MAX	4096
+#endif
+
+static void stats_poll(int map_fd, __u32 map_type, int interval, char pin_dir[PATH_MAX], struct bpf_map_info info)
 {
 	struct stats_record prev, record = { 0 };
 
@@ -203,16 +207,21 @@ static void stats_poll(int map_fd, __u32 map_type, int interval)
 	usleep(1000000/4);
 
 	while (1) {
+
+		int stats_map_fd = open_bpf_map_file(pin_dir, "xdp_stats_map", &info);
+		if (stats_map_fd < 0) {
+			return;
+		} else if (map_fd != stats_map_fd) {
+			map_fd = stats_map_fd;
+			memset(&prev, 0, sizeof(struct stats_record));
+		}
+
 		prev = record; /* struct copy */
 		stats_collect(map_fd, map_type, &record);
 		stats_print(&record, &prev);
 		sleep(interval);
 	}
 }
-
-#ifndef PATH_MAX
-#define PATH_MAX	4096
-#endif
 
 const char *pin_basedir =  "/sys/fs/bpf";
 
@@ -270,6 +279,6 @@ int main(int argc, char **argv)
 		       );
 	}
 
-	stats_poll(stats_map_fd, info.type, interval);
+	stats_poll(stats_map_fd, info.type, interval, pin_dir, info);
 	return EXIT_OK;
 }

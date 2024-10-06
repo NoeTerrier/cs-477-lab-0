@@ -3,6 +3,8 @@
 #include <linux/in.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
+#include <linux/tcp.h>
+#include <linux/udp.h>
 
 // The parsing helper functions from the packet01 lesson have moved here
 #include "../common/parsing_helpers.h"
@@ -57,7 +59,54 @@ static __always_inline int vlan_tag_push(struct xdp_md *ctx,
 SEC("xdp")
 int xdp_port_rewrite_func(struct xdp_md *ctx)
 {
-	return XDP_PASS;
+	struct ethhdr *eth;
+	struct tcphdr *tcphdr;
+	int action = XDP_PASS;
+	struct iphdr *iphdr;
+	struct ipv6hdr *ipv6hdr;
+	struct udphdr *udphdr;
+	void *data = (void *)(long)ctx->data;
+	void *data_end = (void *)(long)ctx->data_end;
+	struct hdr_cursor nh = { .pos = data };
+
+	int eth_type, ip_type;
+	eth_type = parse_ethhdr(&nh, data_end, &eth);
+	if (eth_type < 0) {
+		action = XDP_ABORTED;
+		goto out;
+	}
+
+	if (eth_type == bpf_htons(ETH_P_IP)) {
+		ip_type = parse_iphdr(&nh, data_end, &iphdr);
+	} else if (eth_type == bpf_htons(ETH_P_IPV6)) {
+		ip_type = parse_ip6hdr(&nh, data_end, &ipv6hdr);
+	} else {
+		goto out;
+	}
+
+	if (ip_type == IPPROTO_UDP) {
+		if (parse_udphdr(&nh, data_end, &udphdr) < 0) {
+			action = XDP_ABORTED;
+			goto out;
+		}
+
+		udphdr->dest = bpf_htons(bpf_ntohs(udphdr->dest) - 1);
+		udphdr->check += bpf_htons(1);
+		if (!udphdr->check)
+			udphdr->check += bpf_htons(1);
+	} else if (ip_type == IPPROTO_TCP) {
+		if (parse_tcphdr(&nh, data_end, &tcphdr) < 0) {
+			action = XDP_ABORTED;
+			goto out;
+		}
+		tcphdr->dest = bpf_htons(bpf_ntohs(tcphdr->dest) - 1);
+		tcphdr->check += bpf_htons(1);
+		if (!tcphdr->check)
+			tcphdr->check += bpf_htons(1);
+	}
+
+out:
+	return xdp_stats_record_action(ctx, action);
 }
 
 /* VLAN swapper; will pop outermost VLAN tag if it exists, otherwise push a new
@@ -79,7 +128,6 @@ int xdp_vlan_swap_func(struct xdp_md *ctx)
 	if (nh_type < 0)
 		return XDP_PASS;
 
-	/* Assignment 2 and 3 will implement these. For now they do nothing */
 	if (proto_is_vlan(eth->h_proto))
 		vlan_tag_pop(ctx, eth);
 	else
